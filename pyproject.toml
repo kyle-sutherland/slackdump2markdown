@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "slackdump2markdown"
+version = "0.1.0"
+description = ""
+authors = ["velveteen-rever <velveteen.rever@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+google-auth-httplib2 = "^0.2.0"
+google-auth-oauthlib = "^1.2.0"
+google-api-python-client = "^2.135.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
