@@ -78,12 +78,40 @@ def create_formatted_googledoc(conversations, directory):
     docs_service = build("docs", "v1", credentials=creds)
     drive_service = build("drive", "v3", credentials=creds)
 
+    # Create a new folder in Google Drive
+    folder_name = os.path.basename(os.path.normpath(directory))
+    folder_metadata = {
+        "name": folder_name,
+        "mimeType": "application/vnd.google-apps.folder",
+    }
+    folder = drive_service.files().create(body=folder_metadata, fields="id").execute()
+    folder_id = folder.get("id")
+
+    # Create attachments subfolder
+    attachments_folder_metadata = {
+        "name": "attachments",
+        "mimeType": "application/vnd.google-apps.folder",
+        "parents": [folder_id],
+    }
+    attachments_folder = (
+        drive_service.files()
+        .create(body=attachments_folder_metadata, fields="id")
+        .execute()
+    )
+    attachments_folder_id = attachments_folder.get("id")
+
+    # Create the document in the new folder
     document = (
         docs_service.documents()
         .create(body={"title": "Slack Conversation Log"})
         .execute()
     )
     document_id = document["documentId"]
+
+    # Move the document to the new folder
+    drive_service.files().update(
+        fileId=document_id, addParents=folder_id, fields="id, parents"
+    ).execute()
 
     requests = [
         {"insertText": {"location": {"index": 1}, "text": "Slack Conversation Log\n"}},
@@ -152,7 +180,10 @@ def create_formatted_googledoc(conversations, directory):
         for attachment in message["attachments"]:
             file_path = os.path.join(directory, attachment["local_path"])
             if os.path.exists(file_path):
-                file_metadata = {"name": attachment["name"]}
+                file_metadata = {
+                    "name": attachment["name"],
+                    "parents": [attachments_folder_id],
+                }
                 media = MediaFileUpload(file_path, resumable=True)
                 file = (
                     drive_service.files()
@@ -199,6 +230,7 @@ def create_formatted_googledoc(conversations, directory):
         documentId=document_id, body={"requests": requests}
     ).execute()
     print(f"Document created: https://docs.google.com/document/d/{document_id}/edit")
+    print(f"Folder created: https://drive.google.com/drive/folders/{folder_id}")
 
 
 def main():
