@@ -7,6 +7,7 @@ from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.http import MediaFileUpload
+from googleapiclient.errors import HttpError
 
 
 def parse_json_files(directory):
@@ -122,13 +123,6 @@ def create_formatted_googledoc(conversations, directory):
                 "fields": "namedStyleType",
             }
         },
-        {
-            "updateTextStyle": {
-                "range": {"startIndex": 1, "endIndex": 2},
-                "textStyle": {"fontSize": {"magnitude": 11, "unit": "PT"}},
-                "fields": "fontSize",
-            }
-        },
     ]
 
     for message in conversations:
@@ -146,6 +140,20 @@ def create_formatted_googledoc(conversations, directory):
                     "insertText": {
                         "location": {"index": start_index},
                         "text": f"{user} [{timestamp}]: {text}\n",
+                    }
+                },
+                {
+                    "updateTextStyle": {
+                        "range": {
+                            "startIndex": start_index,
+                            "endIndex": start_index
+                            + len(user)
+                            + len(timestamp)
+                            + len(text)
+                            + 5,
+                        },
+                        "textStyle": {"fontSize": {"magnitude": 11, "unit": "PT"}},
+                        "fields": "fontSize",
                     }
                 },
                 {
@@ -187,12 +195,34 @@ def create_formatted_googledoc(conversations, directory):
                 media = MediaFileUpload(file_path, resumable=True)
                 file = (
                     drive_service.files()
-                    .create(body=file_metadata, media_body=media, fields="id")
+                    .create(
+                        body=file_metadata,
+                        media_body=media,
+                        fields="id, mimeType, webContentLink",
+                    )
                     .execute()
                 )
 
+                mime_type = file.get("mimeType", "")
+
                 requests.extend(
                     [
+                        {
+                            "updateTextStyle": {
+                                "range": {
+                                    "startIndex": start_index,
+                                    "endIndex": start_index
+                                    + len(user)
+                                    + len(timestamp)
+                                    + len(text)
+                                    + 5,
+                                },
+                                "textStyle": {
+                                    "fontSize": {"magnitude": 11, "unit": "PT"}
+                                },
+                                "fields": "fontSize",
+                            },
+                        },
                         {
                             "insertText": {
                                 "location": {
@@ -205,8 +235,61 @@ def create_formatted_googledoc(conversations, directory):
                                 "text": f"\nAttachment: {attachment['name']}\n",
                             }
                         },
+                    ]
+                )
+
+                if mime_type.startswith("image/"):
+                    # Create a publicly accessible link
+                    drive_service.permissions().create(
+                        fileId=file["id"],
+                        body={"type": "anyone", "role": "reader"},
+                        fields="id",
+                    ).execute()
+
+                    web_content_link = file.get("webContentLink", "")
+                    if web_content_link:
+                        requests.append(
+                            {
+                                "insertInlineImage": {
+                                    "location": {
+                                        "index": start_index
+                                        + len(user)
+                                        + len(timestamp)
+                                        + len(text)
+                                        + 5
+                                        + len(attachment["name"])
+                                        + 12
+                                    },
+                                    "uri": web_content_link,
+                                    "objectSize": {
+                                        "height": {"magnitude": 200, "unit": "PT"},
+                                        "width": {"magnitude": 200, "unit": "PT"},
+                                    },
+                                }
+                            }
+                        )
+                    else:
+                        requests.append(
+                            {
+                                "insertText": {
+                                    "location": {
+                                        "index": start_index
+                                        + len(user)
+                                        + len(timestamp)
+                                        + len(text)
+                                        + 5
+                                        + len(attachment["name"])
+                                        + 12
+                                    },
+                                    "text": f"Image could not be inserted. View it here: https://drive.google.com/file/d/{file['id']}/view\n",
+                                }
+                            }
+                        )
+                else:
+                    # For non-image files, insert a link to the file
+                    requests.append(
                         {
-                            "insertInlineImage": {
+                            "insertText": {
                                 "location": {
                                     "index": start_index
                                     + len(user)
@@ -216,21 +299,25 @@ def create_formatted_googledoc(conversations, directory):
                                     + len(attachment["name"])
                                     + 12
                                 },
-                                "uri": f"https://drive.google.com/uc?id={file['id']}",
-                                "objectSize": {
-                                    "height": {"magnitude": 200, "unit": "PT"},
-                                    "width": {"magnitude": 200, "unit": "PT"},
-                                },
+                                "text": f"Link to file: https://drive.google.com/file/d/{file['id']}/view\n",
                             }
-                        },
-                    ]
-                )
+                        }
+                    )
 
-    docs_service.documents().batchUpdate(
-        documentId=document_id, body={"requests": requests}
-    ).execute()
-    print(f"Document created: https://docs.google.com/document/d/{document_id}/edit")
-    print(f"Folder created: https://drive.google.com/drive/folders/{folder_id}")
+    try:
+        docs_service.documents().batchUpdate(
+            documentId=document_id, body={"requests": requests}
+        ).execute()
+        print(
+            f"Document created: https://docs.google.com/document/d/{document_id}/edit"
+        )
+        print(f"Folder created: https://drive.google.com/drive/folders/{folder_id}")
+    except HttpError as error:
+        print(f"An error occurred: {error}")
+        print("Requests that caused the error:")
+        for i, request in enumerate(requests):
+            print(f"Request {i}:")
+            print(json.dumps(request, indent=2))
 
 
 def main():
